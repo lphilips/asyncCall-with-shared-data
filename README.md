@@ -1,82 +1,81 @@
-# RPC
-A nodeJS library for Remote Procedure Calls between Client & Server with exception propagation (back to caller from callee) and delivery guarantees to support finegrained failure handling.
+# RPC + Data Store library
 
-### Features
-#### **Exceptions**: 
-All exceptions thrown by the callee will be serialized back to the caller so it can react upon it:
-* *Native Javascript errors*: EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError.
-* *Application or Userdefined errors*: these should have as prototype Error();.
-* *Network errors*: (see further)
-* Others: Library specific ones like serializationError, FunctionNotFound, etc.
+This project is based on [asyncCall][asyncCall] and [datastore][datastore].
+The two projects are combined such that changes to the datastore are propagated to server or clients via remote procedure calls. This way, custom failure handling can be added when for example no network is available. 
+By using `store.set(key, value)`, the changes are automatically propagated through the network. The store does not take conflict resolution into account.
 
-#### **Network related failures**: 
-
-No network connection etc.
-* *Network disconnections*: Network disconnections can cause RPC to fail. The network might be disconnected before performing or during the remote call (Omission failures, crash failures). This may hamper an application relying on these RPCs. We therefore incorporate a mechanism to retry a RPC call when it has failed. Simply retrying a RPC call could cause operations to perform operations multiple times (calling functions which perform side-effects that are not idempotent). We use a mechanism of filters and caching to avoid this problem. Hence the caller can decide what guarantees it want e.g. Maybe, At-Most-Once, Once on a call level.
-```javascript 
-myClient.rpc('remoteFunction', a, b, c, function(err, res, retry) {
-   //err will contain a NetworkError, when we are disconnected.
-   if(err) retry();       
-});
-```
-* *Due*: Able to specify a timeout for a callback, indicating that we want the answer within the specified time or never. This is for dealing with slow functions or network issues.
-```javascript 
-//We want the answer within 1 second
-myClient.rpc('remoteFunction', a, b, c, function(err, res) {
-    //err will contain TimeOutError when we did not get the result within 1 second.
-}, 1000);
-```
-
-#### **Other**: 
-Access to socket.io network connection options (specify heartbeat intervals, reconnection logic etc.) and other options.
-
-### Example: 
-Small ping-pong example. Client sends pings to server, server answers with pongs.
-
-**Server code**
+### Example: chat application
+Full example can be found under Examples.
+##### Server side
+Set up the server and connect a store to it.
 ```javascript
-//set-up using express app.
-var server = new ServerRpc(app);
-
-//Expose functions to the client
-server.expose({
-    'ping': function(counter, callback) {
-        var that = this; 
-        counter++;
-
-        // this.rpc(...) will perform another rpc only to the call originator.
-        // alternatively use server.rpc for broadcast to all clients
-
-        setTimeout(function(){
-            that.rpc('pong', [counter]);
-        }, 2000);
-
-        var result = new Date();
-        callback(null, result);
+var myServer = new ServerRpc(app);
+var store = new Store();
+store.connectServer(myServer);
+```
+The server must implement the following two remote methods:
+```javascript
+//Exposed interface.
+myServer.expose({
+    'updateStore' : function (key, value, callback) {
+        store.set(key, value, false);
+    },
+    'retrieveStore' : function (key, val, cb) {
+        var id = this.id;
+        store.loop(function (key, value) {
+            myServer.rpcTo(id, 'updateStore', key, value)
+        });
+        return cb(null, store.data);
     }
 });
 ```
-
-**Client code**
-
-Include *client/bundle.js* for all RPC logic.
+To add a default chat message:
 ```javascript
-var client = new ClientRpc('http://127.0.0.1:3000');
+store.set('messages', ['Welcome!']);
+```
+##### Client side
 
-client.expose({
-    'pong': function(counter, callback) {
-        //send another ping
-        client.rpc('ping', counter, function(err, res) {
-            if(err)
-                $messages.append('<p>unsuccessful ping ' + counter + " Err: " + err, "</p>");
-            else       
-                $messages.append('<p>successful ping ' + counter + " Time: " + res, "</p>"); 
-        }, 10); //very small due will result in fail / success pings
+Set up a client and connect a store to it. The store can be configured to automatically write to localStorage as well.
+```javascript
+var myClient = new ClientRpc('http://127.0.0.1:3000', options);
+var store = new Store();
+store.localStore(localStorage, 'chatApp', true); // Optional
+store.connectClient(myClient);
+```
+
+The client must implement the following remote method. In this case, the call to `displayMessages` is application specific and responsible for updating the UI.
+```javascript
+//Exposed interface.
+myClient.expose({
+    'updateStore': function (key, val, cb) {
+        store.set(key, val, true);
+        displayMessages();
     }
 });
-
-//start sending a ping to the server with counter 0.
-client.rpc('ping', 0, function(err, res, retry){
-    if(err) retry();
-});
 ```
+Displaying all the messages:
+```javascript
+function displayMessages () {
+    var messages = store.get('messages');
+    $messages.empty();
+    messages.forEach(function (message) {
+         $messages.append('<p>' + message + '</p>');
+    })
+}
+```
+Updating the store when the Send button is clicked. The call to `store.set(key, value)` is responsible for propagating the change to the server, and thus also to the other connected clients.
+```javascript
+$('#btn').click(function () {
+    var msg = $('.message').val();
+    var author = $('.author').val();
+    messages = store.get('messages');
+    messages.push(author + ": " + msg);
+    store.set('messages', messages);
+})
+```
+
+
+   [asyncCall]: <https://github.com/dielc/asyncCall.js>
+   [datastore]: <https://github.com/bredele/datastore>
+  
+
