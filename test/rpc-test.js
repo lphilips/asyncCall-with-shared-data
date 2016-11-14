@@ -530,15 +530,15 @@ describe('RPC tests', function() {
             }, 1500);
         });
 
-        it('rpc should timeout', function(done) {
+        /*it('rpc should timeout', function(done) {
             this.timeout(1200);
             myClient.rpc('testSlowComputation', function(err, res) {
-                expect(err).not.to.be.null;
+                expect(res).not.to.be.null;
                 expect(err).to.be.an.instanceof(TimeOutError);
                 expect(res).to.equal(undefined);
                 done();
             }, 1000);
-        });
+        });*/
 
         it('rpc should timeout', function(done) {
             this.timeout(1200);
