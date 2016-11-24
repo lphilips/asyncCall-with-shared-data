@@ -2,73 +2,29 @@
 
 var express = require('express'),
     app = express(),
-    ServerRpc = require('../lib/rpc-server.js'),
-    ClientRpc = require('../lib/rpc-client.js'),
+    ServerData = require('../lib/data-server.js'),
+    ClientData = require('../lib/data-client.js'),
     Store = require('../lib/store.js'),
     ReplicatedObject = require('../lib/ReplicatedObject.js'),
-    port = 8125,
+    port = 8121,
     assert = require("assert"),
     expect = require('chai').expect,
     Clock = require('../lib/clock.js');
 
 app.use("/", express.static(__dirname + '/'));
 
-var methods = {
-    '__updateFromClient__': function (uid, prop, value, clock, cb) {
-        var obj = storeS.getObject(uid);
-        if (obj)
-            obj.__updateFromClient__(prop, value, clock, this.id);
-    }
-};
 
-var myServer = new ServerRpc(app, port);
-var storeS = new Store();
-myServer.expose(methods);
+var myServer = new ServerData(app, port);
 
 
-myServer.onConnection(function (client) {
-    Object.keys(storeS.store).forEach(function(key, index) {
-        var obj = storeS.store[key];
-        var clock = obj.__clock;
-        myServer.rpcTo(client.id, '__addObjectFromServer__', key, obj, clock);
-    });
-});
-
-
-var createClient = function () {
-    var store = new Store();
-    var myClient = new ClientRpc('http://127.0.0.1:8125', {
+var createClient = function (cb) {
+    var myClient = new ClientData('http://127.0.0.1:8121', {
         throwNativeError: true
-    });
-    var clientMethods =  {
-        '__updateFromServer__': function (uid, prop, value, clock, cb) {
-            var obj = store.getObject(uid);
-            if (obj) {
-                obj.__updateFromServer__(prop, value, clock);
-            }
-
-        },
-        '__rollbackClock__' : function (uid, obj, clock, cb) {
-            var obj = store.getObject(uid);
-            obj.__clock = clock;
-            obj.__updateFromServer__(obj, clock);
-        },
-        '__addObjectFromServer__': function (uid, object, clock, cb) {
-            var obj = store.getObject(uid);
-            if (!obj) {
-                var replica = ReplicatedObject.makeReplicatedObjectClient(myClient, store, '__updateFromServer__', '__updateFromClient__', object, uid, clock);
-                store.addObject(replica, uid);
-            } else {
-                obj.__updateFromServer__(object, clock);
-            }
-        }
-    };
-    myClient.store = store;
-    myClient.expose(clientMethods);
-    return myClient;
+    },cb);
+   return myClient;
 }
 
-var myClient = createClient();
+var myClient = createClient(function (name, key, value) {});
 var storeC = myClient.store;
 
 
@@ -76,14 +32,60 @@ function ReplicatedFooServer (x, id) {
     function Foo(x) {
         this.x = x
     }
-    return ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', new Foo(x), id, Clock.makeClock());
+    return  myServer.makeReplicatedObject( id, new Foo(x));
 }
 
 describe('test for replicated object', function() {
 
+    it('distributing object - with id', function (done) {
+       this.timeout(1500);
+        var id = "id";
+        var replicatedS = myServer.makeReplicatedObject(id, {});
+        setTimeout(function () {
+            var replicatedC = storeC.getObject(id);
+            expect(replicatedC.uid).to.equal(replicatedS.uid);
+            done();
+        }, 1000)
+    });
+
+    it('distributing object - without id', function (done) {
+        this.timeout(1500);
+        var replicatedS = myServer.makeReplicatedObject(false, {x: 42});
+        var id = replicatedS.uid;
+        setTimeout(function () {
+            var replicatedC = storeC.getObject(id);
+            expect(replicatedC.x).to.equal(replicatedS.x);
+            done();
+        }, 1000)
+    });
+
+    it('distributing objects - new object cb', function (done) {
+        this.timeout(2500);
+        var client = createClient(function (id, value) {
+            expect(id).to.equal("newobject");
+            expect(value.x).to.equal(22);
+            client.simulateDisconnect();
+            done();
+        });
+        myServer.makeReplicatedObject("newobject", {x: 22});
+
+    });
+
+    it('distributing objects - update cb', function (done) {
+        this.timeout(3500);
+        myClient.makeReplicatedObject("updateobject", {x:1}, function (name, key, value) {
+            expect(name).to.equal("updateobject");
+            expect(key).to.equal("x");
+            expect(value).to.equal(42);
+            done();
+        });
+        var os = myServer.makeReplicatedObject("updateobject", {x:1});
+        os.x = 42;
+    });
+
     it('replicated object - assignment server', function(done) {
         this.timeout(1500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica1",  Clock.makeClock());
+        var replicatedS = myServer.makeReplicatedObject("replica1", {x:1});
         replicatedS.x = 101;
         setTimeout(function() {
             var replicatedC = storeC.store["replica1"];
@@ -94,7 +96,7 @@ describe('test for replicated object', function() {
 
     it('replicated object - assignment client', function(done) {
         this.timeout(3500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica2", Clock.makeClock());
+        var replicatedS = myServer.makeReplicatedObject("replica2", {x:1});
         setTimeout(function() {
             var replicatedC = storeC.store["replica2"];
             replicatedC.x = 101;
@@ -107,9 +109,9 @@ describe('test for replicated object', function() {
 
     it('replicated object - assignment client', function(done) {
         this.timeout(3500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica2", Clock.makeClock());
+        var replicatedS = myServer.makeReplicatedObject("replica3", {x:1});
         setTimeout(function() {
-            var replicatedC = storeC.store["replica2"];
+            var replicatedC = storeC.store["replica3"];
             replicatedC.x = 101;
             setTimeout(function () {
                 expect(replicatedS.x).to.equal(101);
@@ -121,13 +123,13 @@ describe('test for replicated object', function() {
 
     it('replicated object - assignment and new client', function (done) {
         this.timeout(3500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica3", Clock.makeClock());
+        var replicatedS = myServer.makeReplicatedObject("replica4", {x:1});
         setTimeout(function() {
-            var replicatedC = storeC.store["replica3"];
+            var replicatedC = storeC.store["replica4"];
             replicatedC.x = 101;
-            var client2 = createClient();
+            var client2 = createClient(function (name, key, value) {});
             setTimeout(function () {
-                var replicaC2 = client2.store.getObject("replica3");
+                var replicaC2 = client2.store.getObject("replica4");
                 expect(replicaC2.x).to.equal(101);
                 expect(replicatedC.__clock.compare(replicatedS.__clock)).to.equal(Clock.EQ);
                 expect(replicaC2.__clock.compare(replicatedS.__clock)).to.equal(Clock.EQ);
@@ -138,18 +140,18 @@ describe('test for replicated object', function() {
 
     it('replicated object - multiple clients', function (done) {
         this.timeout(4500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica4", Clock.makeClock());
+        var replicatedS = myServer.makeReplicatedObject("replica5", {x:1});
         var clients = [];
         for (var i = 0; i < 5; i++) {
-            clients.push(createClient());
+            clients.push(createClient(function (name, key, value) {}));
         }
         setTimeout(function () {
-            var replicatedC = clients[0].store.getObject("replica4");
+            var replicatedC = clients[0].store.getObject("replica5");
             replicatedC.y = 101;
             var idx = clients.length;
             setTimeout(function () {
                 clients.forEach(function (client) {
-                    expect(client.store.getObject("replica4").y).to.equal(101);
+                    expect(client.store.getObject("replica5").y).to.equal(101);
                     idx--;
                     if (idx <= 0)
                         done();
@@ -160,13 +162,13 @@ describe('test for replicated object', function() {
 
     it('replicated object - concurrent clients', function (done) {
         this.timeout(4500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica5", Clock.makeClock());
-        var client1 = createClient();
-        var client2 = createClient();
+        var replicatedS = myServer.makeReplicatedObject("replica6", {x:1});
+        var client1 = createClient(function (name, key, value) {});
+        var client2 = createClient(function (name, key, value) {});
 
         setTimeout(function () {
-            var replicatedC1 = client1.store.getObject("replica5");
-            var replicatedC2 = client2.store.getObject("replica5");
+            var replicatedC1 = client1.store.getObject("replica6");
+            var replicatedC2 = client2.store.getObject("replica6");
             replicatedC1.y = 101;
             replicatedC2.y = 202;
 
@@ -183,14 +185,14 @@ describe('test for replicated object', function() {
 
     it('replicated object - concurrent update', function (done) {
         this.timeout(5500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica6", Clock.makeClock());
-        var client1 = createClient();
-        var client2 = createClient();
+        var replicatedS = myServer.makeReplicatedObject("replica7", {x:1});
+        var client1 = createClient(function (name, key, value) {});
+        var client2 = createClient(function (name, key, value) {});
 
 
         setTimeout(function () {
-            var replicatedC1 = client1.store.getObject("replica6");
-            var replicatedC2 = client2.store.getObject("replica6");
+            var replicatedC1 = client1.store.getObject("replica7");
+            var replicatedC2 = client2.store.getObject("replica7");
             client1.RPC.connected = false;
             client1.simulateDisconnect();
             client2.RPC.connected = false;
@@ -202,8 +204,8 @@ describe('test for replicated object', function() {
                 client2.RPC.connected = true;
                 setTimeout(function () {
                     var clock = replicatedS.__clock;
-                    expect(client1.store.getObject("replica6").y).to.equal(42);
-                    expect(client2.store.getObject("replica6").y).to.equal(42);
+                    expect(client1.store.getObject("replica7").y).to.equal(42);
+                    expect(client2.store.getObject("replica7").y).to.equal(42);
                     expect(replicatedS.y).to.equal(42);
                     expect(clock.compare(replicatedC1.__clock)).to.equal(Clock.EQ);
                     expect(clock.compare(replicatedC2.__clock)).to.equal(Clock.EQ);
@@ -216,12 +218,12 @@ describe('test for replicated object', function() {
 
     it('replicated object - assignment server, offline client', function(done) {
         this.timeout(4500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', {x: 1}, "replica7", Clock.makeClock());
-        var client = createClient();
-        var client2 = createClient();
+        var replicatedS = myServer.makeReplicatedObject("replica8", {x:1});
+        var client = createClient(function (name, key, value) {});
+        var client2 = createClient(function (name, key, value) {});
         setTimeout(function() {
-            var replicatedC = client.store.getObject("replica7");
-            var replicatedC2 = client2.store.getObject("replica7");
+            var replicatedC = client.store.getObject("replica8");
+            var replicatedC2 = client2.store.getObject("replica8");
             replicatedC.x = 303;
             client.simulateDisconnect();
             client2.simulateDisconnect();
@@ -247,11 +249,10 @@ describe('test for replicated object', function() {
 
     it('replicated array - assignment server', function(done) {
         this.timeout(1500);
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', [1,2,3], "replica8",  Clock.makeClock());
+        var replicatedS = myServer.makeReplicatedObject("replica9", [1,2,3]);
         replicatedS.push(4);
         setTimeout(function() {
-            var replicatedC = storeC.store["replica8"];
-            console.log(replicatedC);
+            var replicatedC = storeC.store["replica9"];
             expect(replicatedC.length).to.equal(4);
             done();
         }, 1000);
@@ -260,10 +261,10 @@ describe('test for replicated object', function() {
 
     it('replicated array - assignment client', function(done) {
         this.timeout(2500);
-        var client = createClient();
-        var replicatedS = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', [1,2,3], "replica9",  Clock.makeClock());
+        var client = createClient(function (name, key, value) {});
+        var replicatedS = myServer.makeReplicatedObject("replica10", [1,2,3]);
         setTimeout(function() {
-            var replicatedC = ReplicatedObject.makeReplicatedObjectClient(client, client.store, '__updateFromServer__', '__updateFromClient__', [1,2,3], "replica9", Clock.makeClock());
+            var replicatedC = myClient.makeReplicatedObject("replica10", [1,2,3]);
             replicatedC.push(4);
             replicatedC.push(5);
             setTimeout(function () {
@@ -276,13 +277,13 @@ describe('test for replicated object', function() {
 
     it('replicated array - object', function (done) {
         this.timeout(2500);
-        var client = createClient();
+        var client = createClient(function (name, key, value) {});
         var foobar = new ReplicatedFooServer(22);
-        var replicated10 = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', [foobar, new ReplicatedFooServer(3)], "replicated10", Clock.makeClock());
+        var replicated10 = myServer.makeReplicatedObject("replicated11", [foobar, new ReplicatedFooServer(3)]);
         setTimeout(function() {
             replicated10[1].x = 42;
             setTimeout(function () {
-                var replicatedC = client.store.getObject("replicated10");
+                var replicatedC = client.store.getObject("replicated11");
                 expect(replicatedC[1].x).to.equal(42);
                 expect(replicatedC[0].x).to.equal(22);
                 expect(replicatedC.__clock.compare(replicated10.__clock)).to.equal(Clock.EQ);
@@ -294,13 +295,13 @@ describe('test for replicated object', function() {
 
     it('replicated array - object multiple clients', function (done) {
         this.timeout(6500);
-        var client = createClient();
-        var client2 = createClient();
+        var client = createClient(function (name, key, value) {});
+        var client2 = createClient(function (name, key, value) {});
         var foobar = new ReplicatedFooServer(22);
-        var replicated11 = ReplicatedObject.makeReplicatedObjectServer(myServer, storeS, '__updateFromServer__', '__updateFromClient__', [foobar, new ReplicatedFooServer(3)], "replicated11", Clock.makeClock());
+        var replicated11 = myServer.makeReplicatedObject("replica12", [foobar, new ReplicatedFooServer(3)]);
         setTimeout(function() {
-            var replicatedC = client.store.getObject("replicated11");
-            var replicatedC2 = client.store.getObject("replicated11");
+            var replicatedC = client.store.getObject("replica12");
+            var replicatedC2 = client.store.getObject("replica12");
             replicated11[1].x = 101;
             client2.simulateDisconnect();
             setTimeout(function () {
