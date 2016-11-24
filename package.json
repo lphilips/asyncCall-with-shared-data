@@ -1,15 +1,16 @@
 {
-  "name": "rpc",
+  "name": "rpc-and-store",
   "version": "0.0.1",
-  "description": "An RPC library.",
+  "description": "An RPC library with shared data.",
   "main": "index.js",
-  "author": "Diel Caroes",
+  "author": "Laure Philips",
   "private": true,
-  "license": "BSD",
+  "license": "BSD-2-Clause",
   "dependencies": {
     "express": "3.4.8",
     "socket.io": "",
-    "socket.io-client": ""
+    "socket.io-client": "",
+    "lineage": ""
   },
   "devDependencies": {
     "expect.js": "0.3.1",
@@ -18,13 +19,14 @@
   },
   "scripts": {
     "test": "mocha",
-    "build-js": "browserify lib/rpc-client.js -o client/bundle.js -d",
+    "build-js": "browserify lib/rpc-client.js  lib/data-client.js lib/store.js lib/clock.js lib/ObservableObject.js lib/ReplicatedObject.js -o client/bundle.js -d",
     "watch-js": "watchify lib/rpc-client.js -o client/bundle.js -dv"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dielc/rpc"
+    "url": "git+https://github.com/dielc/rpc.git"
   },
+
   "bugs": {
     "url": "https://github.com/dielc/rpc/issues"
   },
